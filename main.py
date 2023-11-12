@@ -1,52 +1,64 @@
-import io
-
 import discord
-import aiohttp
+import datetime
+import sys
+import asyncio
 
 from discord.ext import commands
+from loguru import logger
 
-intents = discord.Intents.default()
-intents.messages = True
-intents.message_content = True
-intents.guild_messages = True
+# Настройки бота
+TOKEN = "Токен"  # Замените на ваш токен
+PREFIX = "!"
+DEBUG = True
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+# Словарь маппинга каналов
+CHANNEL_MAPPINGS = {
+    1173017625886998678: 1171772079872430101,  # ID исходного канала: ID целевого канала
+    # Добавьте дополнительные каналы здесь
+}
 
-source_channel = 1137055512802906122
-destination_channel = 1171772079872430101
+# Настройка логирования
+logger.remove()
+log_file_name = f'{datetime.datetime.now().strftime("%d-%m-%Y")}.log'
+logger.add(log_file_name, level="DEBUG" if DEBUG else "INFO", rotation='1 day')
+logger.add(sys.stderr, colorize=True, level='DEBUG' if DEBUG else 'INFO')
+
+# Настройка интентов
+intents = discord.Intents.default()  # Инициализация интентов
+intents.messages = True  # Разрешение для обработки сообщений
+intents.members = True   # Разрешение для работы с участниками сервера
+
+#Проблема возникает именно в интентах (кусок кода выше). Они конфликтуют с токеном юзера, но адекватно работают с токеном бота
+
+# Класс для мирроринга сообщений
+class ServerMirror:
+    def __init__(self, bot):
+        self.bot = bot
+
+    async def on_message(self, message):
+        if message.channel.id in CHANNEL_MAPPINGS:
+            target_channel_id = CHANNEL_MAPPINGS[message.channel.id]
+            target_channel = self.bot.get_channel(target_channel_id)
+            if target_channel:
+                # Создание копии embeds
+                embeds = [discord.Embed.from_dict(embed.to_dict()) for embed in message.embeds]
+                # Отправка сообщения с тем же содержимым и embeds
+                await target_channel.send(content=message.content, embeds=embeds)
+
+# Инициализация бота
+bot = commands.Bot(command_prefix=PREFIX, case_insensitive=True, intents=intents)  # Исправлено здесь
+
+@bot.event
+async def on_connect():
+    logger.success("Logged on as {0.user}".format(bot))
 
 @bot.event
 async def on_message(message):
-    if message.author.bot:
-        return
+    await bot.process_commands(message)
+    await server_mirror.on_message(message)
 
-    if message.channel.id == source_channel:
-        target_channel = bot.get_channel(destination_channel)
-        if target_channel:
-            if message.content:
-                await target_channel.send(message.content)
-
-            for attachment in message.attachments:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(attachment.url) as resp:
-                        if resp.status == 200:
-                            data = io.BytesIO(await resp.read())
-                            await target_channel.send(file=discord.File(data, attachment.filename))
-        else:
-            print(f"Канал с ID {destination_channel} не найден.")
+# Запуск бота
+if __name__ == '__main__':
+    bot.run(TOKEN)
 
 
-@bot.event
-async def on_ready():
-    print(f'Logged in as {bot.user.name}')
-
-@bot.command()
-async def send_message(ctx, *, message):
-    channel_id = 1171772079872430101
-    channel = bot.get_channel(channel_id)
-    if channel:
-        await channel.send(message)
-    else:
-        await ctx.send("Канал не найден.")
-
-bot.run('YOUR_DS_TOKEN')
